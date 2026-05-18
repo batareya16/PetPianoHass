@@ -18,7 +18,7 @@ from .const import (
     CHAR2_RTC_UUID, CHAR3_SCHEDULE_UUID,
     bytes_to_int, int_to_bytes, get_field, set_field,
     CHAR1_MODE, CHAR1_PORTIONS_TODAY, CHAR1_BATTERY,
-    CHAR1_POWER_SOURCE, CHAR1_DOUBLE_NOTE,
+    CHAR1_POWER_SOURCE, CHAR1_TUTOR_LEVEL,
     CHAR1_MOTOR_JAM, CHAR1_MANUAL_DISPENSE,
     CHAR4_VOLUME, CHAR4_MAX_PORTIONS, CHAR4_MEAL_SIZE_1,
     CHAR4_MEAL_SIZE_2, CHAR4_SCHEDULE_ENABLE,
@@ -89,12 +89,14 @@ class PetPianoData:
 def _decode_char1(data: bytes) -> dict:
     v = bytes_to_int(data)
     _LOGGER.debug("CHAR1 raw=%s int=0x%08X", data.hex(), v)
+    raw_battery = get_field(v, *CHAR1_BATTERY)  # 0-63, scale to 0-100%
+    battery_pct = round(raw_battery * 100 / 63)
     return {
         "mode":          get_field(v, *CHAR1_MODE),
         "portions_today":get_field(v, *CHAR1_PORTIONS_TODAY),
-        "battery":       get_field(v, *CHAR1_BATTERY),
-        "power_source":  bool(get_field(v, *CHAR1_POWER_SOURCE)),
-        "double_note":   bool(get_field(v, *CHAR1_DOUBLE_NOTE)),
+        "battery":       battery_pct,
+        "power_source":  bool(get_field(v, *CHAR1_POWER_SOURCE)),  # 1=wall
+        "tutor_level":   get_field(v, *CHAR1_TUTOR_LEVEL),
         "motor_jam":     bool(get_field(v, *CHAR1_MOTOR_JAM)),
     }
 
@@ -273,7 +275,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         result.portions_today = d1["portions_today"]
         result.battery        = d1["battery"]
         result.power_source   = d1["power_source"]
-        result.double_note    = d1["double_note"]
+        result.tutor_level    = d1["tutor_level"]
         result.motor_jam      = d1["motor_jam"]
 
         d4 = _decode_char4(raw4)
@@ -375,3 +377,39 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                     await self._write_char(client, CHAR4_SETTINGS2_UUID, int_to_bytes(v))
             except (BleakError, asyncio.TimeoutError) as e:
                 _LOGGER.error("Set schedule enabled failed: %s", e)
+
+    async def async_set_mode(self, mode: int) -> None:
+        """Set operating mode: 0=Normal, 1=Tutor, 2=Concert."""
+        async with self._lock:
+            try:
+                client = self._make_client()
+                async with client:
+                    raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
+                    v = bytes_to_int(raw)
+                    v = set_field(v, *CHAR1_MODE, max(0, min(2, mode)))
+                    await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
+                    _LOGGER.info("Mode set to %d", mode)
+            except (BleakError, asyncio.TimeoutError) as e:
+                _LOGGER.error("Set mode failed: %s", e)
+
+    async def async_set_meal_active(self, meal: int, active: bool) -> None:
+        """Enable or disable a meal slot (meal=1,2,3)."""
+        meal_active_fields = {
+            1: CHAR3_MEAL1_ACTIVE,
+            2: CHAR3_MEAL2_ACTIVE,
+            3: CHAR3_MEAL3_ACTIVE,
+        }
+        field = meal_active_fields.get(meal)
+        if not field:
+            return
+        async with self._lock:
+            try:
+                client = self._make_client()
+                async with client:
+                    raw = await self._read_char(client, CHAR3_SCHEDULE_UUID)
+                    v = bytes_to_int(raw)
+                    v = set_field(v, *field, int(active))
+                    await self._write_char(client, CHAR3_SCHEDULE_UUID, int_to_bytes(v))
+                    _LOGGER.info("Meal %d active=%s", meal, active)
+            except (BleakError, asyncio.TimeoutError) as e:
+                _LOGGER.error("Set meal active failed: %s", e)

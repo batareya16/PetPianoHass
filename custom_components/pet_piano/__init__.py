@@ -16,7 +16,7 @@ from .coordinator import PetPianoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SWITCH, Platform.NUMBER]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SWITCH, Platform.NUMBER, Platform.SELECT]
 
 CARD_URL = "/pet_piano/pet-piano-card.js"
 CARD_DIR = pathlib.Path(__file__).parent / "www"
