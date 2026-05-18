@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pet Piano",
+        "description": "Select your Pet Piano device",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "confirm": {
+        "title": "Pet Piano found!",
+        "description": "Found Pet Piano at {address}. Click Submit to add it."
+      }
+    },
+    "abort": {
+      "already_configured": "Pet Piano is already configured",
+      "no_devices_found": "No Pet Piano devices found. Make sure it's turned on and nearby."
+    }
+  }
+}
