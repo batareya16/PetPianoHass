@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -15,6 +17,19 @@ from .coordinator import PetPianoCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SWITCH, Platform.NUMBER]
+
+CARD_URL = "/pet_piano/pet-piano-card.js"
+CARD_DIR = pathlib.Path(__file__).parent / "www"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register static path for the Lovelace card — runs once on HA start."""
+    if CARD_DIR.exists():
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL.rsplit("/", 1)[0], str(CARD_DIR), cache_headers=False)]
+        )
+        _LOGGER.info("Pet Piano card available at %s", CARD_URL)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

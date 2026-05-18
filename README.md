@@ -84,12 +84,12 @@ Pet Piano is a device that sits in front of your cat. It plays melodies and rewa
 
 A custom dashboard card is included that shows all important info at a glance with a dispense button and schedule overview.
 
-**Step 1** — copy `www/pet-piano-card.js` to `/config/www/`
+**Step 1** — after installing the integration and restarting HA, the card is served automatically — no file copying needed.
 
 **Step 2** — register it as a Lovelace resource:
 Settings → Dashboards → ⋮ → Resources → Add resource:
 ```
-URL:  /local/pet-piano-card.js
+URL:  /pet_piano/pet-piano-card.js
 Type: JavaScript module
 ```
 
