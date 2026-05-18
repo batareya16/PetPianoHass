@@ -123,6 +123,28 @@ class PetPianoCard extends HTMLElement {
       </div>
     </div>
 
+    <!-- Volume slider -->
+    <div style="margin-bottom:14px;padding:10px 14px;background:var(--secondary-background-color,#f5f5f5);border-radius:8px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary-text-color)" stroke-width="2" stroke-linecap="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          ${volume > 0 ? '<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>' : ''}
+          ${volume > 3 ? '<path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>' : ''}
+        </svg>
+        <input type="range" min="0" max="7" value="${volume}" id="pp-vol-slider"
+          style="flex:1;accent-color:var(--primary-color);height:4px">
+        <div style="font-size:13px;font-weight:500;color:var(--primary-text-color);min-width:18px;text-align:right">${volume}</div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary-text-color)" stroke-width="2" stroke-linecap="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+        </svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;padding:0 2px">
+        ${Array.from({length:8},(_,i)=>`<div style="width:3px;height:${4+i*3}px;border-radius:2px;background:${i<=volume ? "var(--primary-color)" : "var(--divider-color,#e0e0e0)"};align-self:flex-end"></div>`).join("")}
+      </div>
+    </div>
+
     <!-- Tutor level (only in tutor mode) -->
     ${mode === "Tutor" ? `
     <div style="margin-bottom:14px;padding:10px 12px;background:var(--secondary-background-color,#f5f5f5);border-radius:8px">
@@ -194,6 +216,28 @@ class PetPianoCard extends HTMLElement {
         entity_id: "switch.pet_piano_schedule"
       });
     };
+
+    const volSlider = this.querySelector("#pp-vol-slider");
+    if (volSlider) {
+      volSlider.oninput = (e) => {
+        const val = parseInt(e.target.value);
+        const label = volSlider.parentElement.querySelector("div[style*='min-width']");
+        if (label) label.textContent = val;
+        const bars = volSlider.closest("div[style*='border-radius:8px']")
+          .querySelectorAll("div[style*='border-radius:2px']");
+        bars.forEach((b, i) => {
+          b.style.background = i <= val
+            ? "var(--primary-color)"
+            : "var(--divider-color,#e0e0e0)";
+        });
+      };
+      volSlider.onchange = (e) => {
+        this._hass.callService("number", "set_value", {
+          entity_id: "number.pet_piano_volume",
+          value: parseInt(e.target.value)
+        });
+      };
+    }
 
     const slider = this.querySelector("#pp-level-slider");
     if (slider) slider.onchange = (e) => {
