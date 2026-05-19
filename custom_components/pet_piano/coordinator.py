@@ -17,7 +17,7 @@ from .const import (
     CHAR1_SETTINGS_UUID, CHAR4_SETTINGS2_UUID,
     CHAR2_RTC_UUID, CHAR3_SCHEDULE_UUID,
     bytes_to_int, int_to_bytes, get_field, set_field,
-    CHAR1_MODE, CHAR1_PORTIONS_TODAY, CHAR1_BATTERY,
+    CHAR1_MODE, CHAR1_MODE_TUTOR, CHAR1_PORTIONS_TODAY, CHAR1_BATTERY,
     CHAR1_POWER_SOURCE, CHAR1_TUTOR_LEVEL,
     CHAR1_MOTOR_JAM, CHAR1_MANUAL_DISPENSE,
     CHAR4_VOLUME, CHAR4_MAX_PORTIONS, CHAR4_MEAL_SIZE_1,
@@ -91,8 +91,16 @@ def _decode_char1(data: bytes) -> dict:
     _LOGGER.debug("CHAR1 raw=%s int=0x%08X", data.hex(), v)
     raw_battery = get_field(v, *CHAR1_BATTERY)  # 0-63, scale to 0-100%
     battery_pct = round(raw_battery * 100 / 63)
+    # Mode: write command is bits 0-1, but READ status is bit 15 for Tutor
+    # Concert status bit TBD — for now infer from write bits
+    write_mode = get_field(v, *CHAR1_MODE)
+    tutor_active = bool(get_field(v, *CHAR1_MODE_TUTOR))
+    if tutor_active:
+        mode = 1  # Tutor confirmed by status bit
+    else:
+        mode = write_mode  # Normal or Concert from command bits
     return {
-        "mode":          get_field(v, *CHAR1_MODE),
+        "mode":          mode,
         "portions_today":get_field(v, *CHAR1_PORTIONS_TODAY),
         "battery":       battery_pct,
         "power_source":  bool(get_field(v, *CHAR1_POWER_SOURCE)),  # 1=wall
@@ -379,7 +387,9 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                 _LOGGER.error("Set schedule enabled failed: %s", e)
 
     async def async_set_mode(self, mode: int) -> None:
-        """Set operating mode: 0=Normal, 1=Tutor, 2=Concert."""
+        """Set operating mode: 0=Normal, 1=Tutor, 2=Concert.
+        Tutor mode requires tutor_level >= 1 — mirrors what Android app does (0x0183BFD1).
+        """
         async with self._lock:
             try:
                 client = self._make_client()
@@ -387,8 +397,24 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                     raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
                     v = bytes_to_int(raw)
                     v = set_field(v, *CHAR1_MODE, max(0, min(2, mode)))
+                    if mode == 1:
+                        # Android app always sets level=1 when enabling Tutor
+                        # Without it the piano has no task and stays silent
+                        if get_field(v, *CHAR1_TUTOR_LEVEL) == 0:
+                            v = set_field(v, *CHAR1_TUTOR_LEVEL, 1)
+                        _LOGGER.info("Tutor mode: writing 0x%08X", v)
+                    elif mode == 0:
+                        # Normal mode: clear tutor status bits
+                        v = set_field(v, *CHAR1_MODE_TUTOR, 0)
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    _LOGGER.info("Mode set to %d", mode)
+                    # Verify write on Tutor — retry once if level didn't stick
+                    if mode == 1:
+                        await asyncio.sleep(0.3)
+                        verify = await self._read_char(client, CHAR1_SETTINGS_UUID)
+                        if get_field(bytes_to_int(verify), *CHAR1_TUTOR_LEVEL) == 0:
+                            _LOGGER.warning("Tutor level didn't stick, retrying write")
+                            await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
+                    _LOGGER.info("Mode set to %d, CHAR1=0x%08X", mode, v)
             except (BleakError, asyncio.TimeoutError) as e:
                 _LOGGER.error("Set mode failed: %s", e)
 

@@ -28,7 +28,9 @@ def set_field(value: int, bit_shift: int, mask: int, new_val: int) -> int:
 
 # ── CHAR1 (34333333) — Settings 1 ──────────────────────────────────────────
 # Calibrated from real device data 0x00833FD0 (wall power, 12 portions, Normal mode)
-CHAR1_MODE            = (0,  0x00000003)  # 2 bits: 0=Normal,1=Tutor,2=Concert
+CHAR1_MODE            = (0,  0x00000003)  # 2 bits: WRITE command (0=Normal,1=Tutor,2=Concert)
+CHAR1_MODE_TUTOR      = (15, 0x00008000)  # 1 bit:  READ status — 1 = currently in Tutor mode
+# Note: Concert status bit TBD (need raw data after Concert switch)
 CHAR1_BATTERY         = (8,  0x00003F00)  # 6 bits: battery 0-63 (63=100%, wall power)
 CHAR1_PORTIONS_TODAY  = (14, 0x003FC000)  # 8 bits: portions dispensed today (confirmed: was 12)
 CHAR1_POWER_SOURCE    = (23, 0x00800000)  # 1 bit:  1=wall adapter, 0=battery
