@@ -44,19 +44,19 @@ BINARY_SENSORS: tuple[PetPianoBinarySensorDescription, ...] = (
     ),
     PetPianoBinarySensorDescription(
         key="meal1_active",
-        name="Meal 1 Active",
+        name="Meal 1 Pending",
         icon="mdi:food",
         value_fn=lambda d: d.meal1_active,
     ),
     PetPianoBinarySensorDescription(
         key="meal2_active",
-        name="Meal 2 Active",
+        name="Meal 2 Pending",
         icon="mdi:food",
         value_fn=lambda d: d.meal2_active,
     ),
     PetPianoBinarySensorDescription(
         key="meal3_active",
-        name="Meal 3 Active",
+        name="Meal 3 Pending",
         icon="mdi:food",
         value_fn=lambda d: d.meal3_active,
     ),

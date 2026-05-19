@@ -73,7 +73,7 @@ class PetPianoData:
         self.meal1_hour: int = 8
         self.meal1_minute: int = 0
         self.meal1_ampm: int = 0
-        self.meal1_active: bool = False
+        self.meal1_active: bool = False   # True = pending (not yet dispensed today)
 
         self.meal2_hour: int = 12
         self.meal2_minute: int = 0
@@ -91,16 +91,10 @@ def _decode_char1(data: bytes) -> dict:
     _LOGGER.debug("CHAR1 raw=%s int=0x%08X", data.hex(), v)
     raw_battery = get_field(v, *CHAR1_BATTERY)  # 0-63, scale to 0-100%
     battery_pct = round(raw_battery * 100 / 63)
-    # Mode: write command is bits 0-1, but READ status is bit 15 for Tutor
-    # Concert status bit TBD — for now infer from write bits
-    write_mode = get_field(v, *CHAR1_MODE)
-    tutor_active = bool(get_field(v, *CHAR1_MODE_TUTOR))
-    if tutor_active:
-        mode = 1  # Tutor confirmed by status bit
-    else:
-        mode = write_mode  # Normal or Concert from command bits
+    # Mode is simply bits 0-1 (0=Normal, 1=Tutor, 2=Concert)
+    # bit 15 is NOT a mode indicator — it's part of the portions counter
     return {
-        "mode":          mode,
+        "mode":          get_field(v, *CHAR1_MODE),
         "portions_today":get_field(v, *CHAR1_PORTIONS_TODAY),
         "battery":       battery_pct,
         "power_source":  bool(get_field(v, *CHAR1_POWER_SOURCE)),  # 1=wall
@@ -139,19 +133,21 @@ def _decode_char2(data: bytes) -> dict:
 def _decode_char3(data: bytes) -> dict:
     v = bytes_to_int(data)
     _LOGGER.debug("CHAR3 raw=%s int=0x%08X", data.hex(), v)
+    # g$MealtStatus: 1 = meal slot is configured/enabled
+    # We expose as True = slot is configured
     return {
-        "meal1_minute": QUARTER_HOUR_MAP.get(get_field(v, *CHAR3_MEAL1_MINUTE), 0),
-        "meal1_hour":   get_field(v, *CHAR3_MEAL1_HOUR),
-        "meal1_ampm":   get_field(v, *CHAR3_MEAL1_AMPM),
-        "meal1_active": bool(get_field(v, *CHAR3_MEAL1_ACTIVE)),
-        "meal2_minute": QUARTER_HOUR_MAP.get(get_field(v, *CHAR3_MEAL2_MINUTE), 0),
-        "meal2_hour":   get_field(v, *CHAR3_MEAL2_HOUR),
-        "meal2_ampm":   get_field(v, *CHAR3_MEAL2_AMPM),
-        "meal2_active": bool(get_field(v, *CHAR3_MEAL2_ACTIVE)),
-        "meal3_minute": QUARTER_HOUR_MAP.get(get_field(v, *CHAR3_MEAL3_MINUTE), 0),
-        "meal3_hour":   get_field(v, *CHAR3_MEAL3_HOUR),
-        "meal3_ampm":   get_field(v, *CHAR3_MEAL3_AMPM),
-        "meal3_active": bool(get_field(v, *CHAR3_MEAL3_ACTIVE)),
+        "meal1_minute":  QUARTER_HOUR_MAP.get(get_field(v, *CHAR3_MEAL1_MINUTE), 0),
+        "meal1_hour":    get_field(v, *CHAR3_MEAL1_HOUR),
+        "meal1_ampm":    get_field(v, *CHAR3_MEAL1_AMPM),
+        "meal1_pending": bool(get_field(v, *CHAR3_MEAL1_ACTIVE)),  # 1=slot configured
+        "meal2_minute":  QUARTER_HOUR_MAP.get(get_field(v, *CHAR3_MEAL2_MINUTE), 0),
+        "meal2_hour":    get_field(v, *CHAR3_MEAL2_HOUR),
+        "meal2_ampm":    get_field(v, *CHAR3_MEAL2_AMPM),
+        "meal2_pending": bool(get_field(v, *CHAR3_MEAL2_ACTIVE)),
+        "meal3_minute":  QUARTER_HOUR_MAP.get(get_field(v, *CHAR3_MEAL3_MINUTE), 0),
+        "meal3_hour":    get_field(v, *CHAR3_MEAL3_HOUR),
+        "meal3_ampm":    get_field(v, *CHAR3_MEAL3_AMPM),
+        "meal3_pending": bool(get_field(v, *CHAR3_MEAL3_ACTIVE)),
     }
 
 
@@ -307,15 +303,15 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         result.meal1_hour   = d3["meal1_hour"]
         result.meal1_minute = d3["meal1_minute"]
         result.meal1_ampm   = d3["meal1_ampm"]
-        result.meal1_active = d3["meal1_active"]
+        result.meal1_active = d3["meal1_pending"]
         result.meal2_hour   = d3["meal2_hour"]
         result.meal2_minute = d3["meal2_minute"]
         result.meal2_ampm   = d3["meal2_ampm"]
-        result.meal2_active = d3["meal2_active"]
+        result.meal2_active = d3["meal2_pending"]
         result.meal3_hour   = d3["meal3_hour"]
         result.meal3_minute = d3["meal3_minute"]
         result.meal3_ampm   = d3["meal3_ampm"]
-        result.meal3_active = d3["meal3_active"]
+        result.meal3_active = d3["meal3_pending"]
 
         return result
 
@@ -388,7 +384,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
 
     async def async_set_mode(self, mode: int) -> None:
         """Set operating mode: 0=Normal, 1=Tutor, 2=Concert.
-        Tutor mode requires tutor_level >= 1 — mirrors what Android app does (0x0183BFD1).
+        Android Tutor pattern: 0x0183xxD1 (bits 0,15,24 set).
         """
         async with self._lock:
             try:
@@ -396,27 +392,22 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                 async with client:
                     raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
                     v = bytes_to_int(raw)
+                    _LOGGER.info("Set mode %d: CHAR1 before=0x%08X", mode, v)
+
                     v = set_field(v, *CHAR1_MODE, max(0, min(2, mode)))
+
                     if mode == 1:
-                        # Android writes: 0x0183BFD1
-                        # Must set bit 15 (CHAR1_MODE_TUTOR) AND bit 24 (level>=1)
+                        # Match Android: sets bit 15 + bit 24 (level=1)
                         v = set_field(v, *CHAR1_MODE_TUTOR, 1)
                         if get_field(v, *CHAR1_TUTOR_LEVEL) == 0:
                             v = set_field(v, *CHAR1_TUTOR_LEVEL, 1)
-                        _LOGGER.info("Tutor mode: writing 0x%08X", v)
                     elif mode == 0:
-                        # Normal: clear Tutor-specific bits
+                        # Normal: clear tutor bits
                         v = set_field(v, *CHAR1_MODE_TUTOR, 0)
-                        _LOGGER.info("Normal mode: writing 0x%08X", v)
+
+                    _LOGGER.info("Set mode %d: CHAR1 writing=0x%08X", mode, v)
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    # Verify write on Tutor — retry once if level didn't stick
-                    if mode == 1:
-                        await asyncio.sleep(0.3)
-                        verify = await self._read_char(client, CHAR1_SETTINGS_UUID)
-                        if get_field(bytes_to_int(verify), *CHAR1_TUTOR_LEVEL) == 0:
-                            _LOGGER.warning("Tutor level didn't stick, retrying write")
-                            await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    _LOGGER.info("Mode set to %d, CHAR1=0x%08X", mode, v)
+                    _LOGGER.info("Set mode %d: write done", mode)
             except (BleakError, asyncio.TimeoutError) as e:
                 _LOGGER.error("Set mode failed: %s", e)
 
