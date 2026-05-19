@@ -76,7 +76,7 @@ class PetPianoTutorLevelNumber(CoordinatorEntity[PetPianoCoordinator], NumberEnt
     def native_value(self) -> float | None:
         if self.coordinator.data is None:
             return None
-        return float(self.coordinator.data.food_level)  # g$CurrentLevel
+        return float(self.coordinator.data.tutor_level)  # bits 24-26 of CHAR1
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_tutor_level(int(value))

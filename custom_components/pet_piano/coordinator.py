@@ -398,14 +398,16 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                     v = bytes_to_int(raw)
                     v = set_field(v, *CHAR1_MODE, max(0, min(2, mode)))
                     if mode == 1:
-                        # Android app always sets level=1 when enabling Tutor
-                        # Without it the piano has no task and stays silent
+                        # Android writes: 0x0183BFD1
+                        # Must set bit 15 (CHAR1_MODE_TUTOR) AND bit 24 (level>=1)
+                        v = set_field(v, *CHAR1_MODE_TUTOR, 1)
                         if get_field(v, *CHAR1_TUTOR_LEVEL) == 0:
                             v = set_field(v, *CHAR1_TUTOR_LEVEL, 1)
                         _LOGGER.info("Tutor mode: writing 0x%08X", v)
                     elif mode == 0:
-                        # Normal mode: clear tutor status bits
+                        # Normal: clear Tutor-specific bits
                         v = set_field(v, *CHAR1_MODE_TUTOR, 0)
+                        _LOGGER.info("Normal mode: writing 0x%08X", v)
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
                     # Verify write on Tutor — retry once if level didn't stick
                     if mode == 1:
