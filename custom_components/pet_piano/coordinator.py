@@ -363,7 +363,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                 async with client:
                     raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
                     v = bytes_to_int(raw)
-                    v = set_field(v, *CHAR2_FOOD_LEVEL, max(0, min(7, level)))
+                    v = set_field(v, *CHAR1_TUTOR_LEVEL, max(0, min(7, level)))
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
                     _LOGGER.info("Tutor level set to %d", level)
             except (BleakError, asyncio.TimeoutError) as e:
