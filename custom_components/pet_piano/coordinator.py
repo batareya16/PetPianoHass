@@ -91,10 +91,20 @@ def _decode_char1(data: bytes) -> dict:
     _LOGGER.debug("CHAR1 raw=%s int=0x%08X", data.hex(), v)
     raw_battery = get_field(v, *CHAR1_BATTERY)  # 0-63, scale to 0-100%
     battery_pct = round(raw_battery * 100 / 63)
-    # Mode is simply bits 0-1 (0=Normal, 1=Tutor, 2=Concert)
-    # bit 15 is NOT a mode indicator — it's part of the portions counter
+    # Mode logic from APK:
+    # - Tutor:   g$CurrentLevel (bits 24-26) > 0
+    # - Concert: g$Mode (bits 0-1) = 1
+    # - Normal:  everything else
+    level = get_field(v, *CHAR1_TUTOR_LEVEL)
+    concert = get_field(v, *CHAR1_MODE)
+    if level > 0:
+        mode = 1        # Tutor
+    elif concert == 1:
+        mode = 2        # Concert
+    else:
+        mode = 0        # Normal
     return {
-        "mode":          get_field(v, *CHAR1_MODE),
+        "mode":          mode,
         "portions_today":get_field(v, *CHAR1_PORTIONS_TODAY),
         "battery":       battery_pct,
         "power_source":  bool(get_field(v, *CHAR1_POWER_SOURCE)),  # 1=wall
@@ -383,8 +393,10 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                 _LOGGER.error("Set schedule enabled failed: %s", e)
 
     async def async_set_mode(self, mode: int) -> None:
-        """Set operating mode: 0=Normal, 1=Tutor, 2=Concert.
-        Android Tutor pattern: 0x0183xxD1 (bits 0,15,24 set).
+        """Set operating mode from APK-confirmed logic:
+        - Tutor:   write g$CurrentLevel (bits 24-26) = 1-7, DON'T touch bits 0-1
+        - Normal:  write g$CurrentLevel = 0, bits 0-1 = 0
+        - Concert: write g$Mode (bits 0-1) = 1, g$CurrentLevel = 0
         """
         async with self._lock:
             try:
@@ -394,16 +406,18 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                     v = bytes_to_int(raw)
                     _LOGGER.info("Set mode %d: CHAR1 before=0x%08X", mode, v)
 
-                    v = set_field(v, *CHAR1_MODE, max(0, min(2, mode)))
-
-                    if mode == 1:
-                        # Match Android: sets bit 15 + bit 24 (level=1)
-                        v = set_field(v, *CHAR1_MODE_TUTOR, 1)
-                        if get_field(v, *CHAR1_TUTOR_LEVEL) == 0:
-                            v = set_field(v, *CHAR1_TUTOR_LEVEL, 1)
-                    elif mode == 0:
-                        # Normal: clear tutor bits
-                        v = set_field(v, *CHAR1_MODE_TUTOR, 0)
+                    if mode == 1:  # Tutor — only write LEVEL, keep bits 0-1 unchanged
+                        level = get_field(v, *CHAR1_TUTOR_LEVEL)
+                        if level == 0:
+                            level = 1
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, level)
+                        # Do NOT change CHAR1_MODE (bits 0-1)
+                    elif mode == 2:  # Concert
+                        v = set_field(v, *CHAR1_MODE, 1)    # bits 0-1 = 1
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)  # clear level
+                    else:  # Normal (mode == 0)
+                        v = set_field(v, *CHAR1_MODE, 0)    # bits 0-1 = 0
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)  # clear level
 
                     _LOGGER.info("Set mode %d: CHAR1 writing=0x%08X", mode, v)
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
