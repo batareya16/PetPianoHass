@@ -172,7 +172,8 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             update_interval=SCAN_INTERVAL,
         )
         self.address = address
-        self._lock = asyncio.Lock()   # prevent concurrent BLE sessions
+        self._lock = asyncio.Lock()
+        self._last_tutor_level: int = 1  # remember level across mode switches
 
     # ── internal BLE helpers ────────────────────────────────────────────────
 
@@ -373,9 +374,12 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                 async with client:
                     raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
                     v = bytes_to_int(raw)
-                    v = set_field(v, *CHAR1_TUTOR_LEVEL, max(0, min(7, level)))
+                    clamped = max(0, min(7, level))
+                    v = set_field(v, *CHAR1_TUTOR_LEVEL, clamped)
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    _LOGGER.info("Tutor level set to %d", level)
+                    if clamped > 0:
+                        self._last_tutor_level = clamped  # remember for mode switches
+                    _LOGGER.info("Tutor level set to %d", clamped)
             except (BleakError, asyncio.TimeoutError) as e:
                 _LOGGER.error("Set tutor level failed: %s", e)
 
@@ -406,18 +410,26 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                     v = bytes_to_int(raw)
                     _LOGGER.info("Set mode %d: CHAR1 before=0x%08X", mode, v)
 
-                    # Always clear ManualDispense bit first — APK (p$ResetDinnerBell) does this explicitly
+                    # Always clear ManualDispense — APK (p$ResetDinnerBell) does this explicitly
                     v = set_field(v, *CHAR1_MANUAL_DISPENSE, 0)
 
-                    if mode == 1:  # Tutor — only write LEVEL, keep bits 0-1 unchanged
-                        level = get_field(v, *CHAR1_TUTOR_LEVEL)
-                        if level == 0:
-                            level = 1
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, level)
-                    elif mode == 2:  # Concert — bits 0-1 = 1, clear level
-                        v = set_field(v, *CHAR1_MODE, 1)
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
-                    else:  # Normal — clear everything
+                    if mode == 1:  # Tutor
+                        # Clear Concert bits, restore saved level
+                        v = set_field(v, *CHAR1_MODE, 0)           # clear bits 0-1
+                        level = self._last_tutor_level or 1
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, max(1, min(7, level)))
+                    elif mode == 2:  # Concert
+                        # Save current level before clearing
+                        current_level = get_field(v, *CHAR1_TUTOR_LEVEL)
+                        if current_level > 0:
+                            self._last_tutor_level = current_level
+                        v = set_field(v, *CHAR1_MODE, 1)            # bits 0-1 = 1
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)     # clear level
+                    else:  # Normal
+                        # Save current level before clearing
+                        current_level = get_field(v, *CHAR1_TUTOR_LEVEL)
+                        if current_level > 0:
+                            self._last_tutor_level = current_level
                         v = set_field(v, *CHAR1_MODE, 0)
                         v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
 
