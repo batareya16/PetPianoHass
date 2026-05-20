@@ -406,18 +406,20 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                     v = bytes_to_int(raw)
                     _LOGGER.info("Set mode %d: CHAR1 before=0x%08X", mode, v)
 
+                    # Always clear ManualDispense bit first — APK (p$ResetDinnerBell) does this explicitly
+                    v = set_field(v, *CHAR1_MANUAL_DISPENSE, 0)
+
                     if mode == 1:  # Tutor — only write LEVEL, keep bits 0-1 unchanged
                         level = get_field(v, *CHAR1_TUTOR_LEVEL)
                         if level == 0:
                             level = 1
                         v = set_field(v, *CHAR1_TUTOR_LEVEL, level)
-                        # Do NOT change CHAR1_MODE (bits 0-1)
-                    elif mode == 2:  # Concert
-                        v = set_field(v, *CHAR1_MODE, 1)    # bits 0-1 = 1
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)  # clear level
-                    else:  # Normal (mode == 0)
-                        v = set_field(v, *CHAR1_MODE, 0)    # bits 0-1 = 0
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)  # clear level
+                    elif mode == 2:  # Concert — bits 0-1 = 1, clear level
+                        v = set_field(v, *CHAR1_MODE, 1)
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
+                    else:  # Normal — clear everything
+                        v = set_field(v, *CHAR1_MODE, 0)
+                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
 
                     _LOGGER.info("Set mode %d: CHAR1 writing=0x%08X", mode, v)
                     await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
