@@ -36,7 +36,7 @@ Pet Piano is a device that sits in front of your cat. It plays melodies and rewa
 
 - **Normal** — the piano plays and dispenses food when the cat presses the correct keys
 - **Tutor** — the device guides the cat step by step, increasing difficulty as the Tutor Level goes up
-- **Concert** — 30-minute pure play sessions; food is only dispensed on schedule, not during play
+- **Concert** — Piano plays only during scheduled 30-minute sessions and stays silent the rest of the time. Requires schedule to be configured in the app or via HA. Recommended for pets who have already mastered the piano.
 
 ---
 

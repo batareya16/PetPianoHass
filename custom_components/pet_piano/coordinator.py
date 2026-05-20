@@ -439,6 +439,37 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             except (BleakError, asyncio.TimeoutError) as e:
                 _LOGGER.error("Set mode failed: %s", e)
 
+    async def async_set_meal_time(self, meal: int, hour12: int, minute_qh: int, ampm: int) -> None:
+        """Set meal time. hour12=1-12, minute_qh=0/15/30/45, ampm=0/1."""
+        from .const import (
+            CHAR3_MEAL1_HOUR, CHAR3_MEAL1_MINUTE, CHAR3_MEAL1_AMPM,
+            CHAR3_MEAL2_HOUR, CHAR3_MEAL2_MINUTE, CHAR3_MEAL2_AMPM,
+            CHAR3_MEAL3_HOUR, CHAR3_MEAL3_MINUTE, CHAR3_MEAL3_AMPM,
+            QUARTER_HOUR_REVERSE,
+        )
+        fields = {
+            1: (CHAR3_MEAL1_HOUR, CHAR3_MEAL1_MINUTE, CHAR3_MEAL1_AMPM),
+            2: (CHAR3_MEAL2_HOUR, CHAR3_MEAL2_MINUTE, CHAR3_MEAL2_AMPM),
+            3: (CHAR3_MEAL3_HOUR, CHAR3_MEAL3_MINUTE, CHAR3_MEAL3_AMPM),
+        }
+        if meal not in fields:
+            return
+        f_hour, f_min, f_ampm = fields[meal]
+        qh = QUARTER_HOUR_REVERSE.get(minute_qh, 0)  # convert :00/:15/:30/:45 → 0/1/2/3
+        async with self._lock:
+            try:
+                client = self._make_client()
+                async with client:
+                    raw = await self._read_char(client, CHAR3_SCHEDULE_UUID)
+                    v = bytes_to_int(raw)
+                    v = set_field(v, *f_hour, max(1, min(12, hour12)))
+                    v = set_field(v, *f_min,  qh)
+                    v = set_field(v, *f_ampm, ampm)
+                    await self._write_char(client, CHAR3_SCHEDULE_UUID, int_to_bytes(v))
+                    _LOGGER.info("Meal %d time set to %02d:%02d %s", meal, hour12, minute_qh, "PM" if ampm else "AM")
+            except (BleakError, asyncio.TimeoutError) as e:
+                _LOGGER.error("Set meal time failed: %s", e)
+
     async def async_set_meal_active(self, meal: int, active: bool) -> None:
         """Enable or disable a meal slot (meal=1,2,3)."""
         meal_active_fields = {
