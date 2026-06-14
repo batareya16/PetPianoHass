@@ -22,7 +22,7 @@ Pet Piano is a device that sits in front of your cat. It plays melodies and rewa
 | Portions Today | Sensor | How many portions have been dispensed today |
 | Mode | Sensor | Current operating mode (Normal / Tutor / Concert) |
 | Device Time | Sensor | Internal RTC clock of the device |
-| Meal 1 / 2 / 3 Time | Sensor | Scheduled feeding times |
+| Meal 1 / 2 / 3 Time | Time | Set scheduled feeding time for each meal slot (rounded to :00 / :15 / :30 / :45) |
 | Motor Jam | Binary Sensor | True if the dispenser motor is stuck |
 | Wall Power | Binary Sensor | True if running on AC adapter |
 | Schedule Active | Binary Sensor | True if the feeding schedule is enabled |
@@ -30,6 +30,7 @@ Pet Piano is a device that sits in front of your cat. It plays melodies and rewa
 | Schedule | Switch | Enable or disable the feeding schedule |
 | Volume | Number | Speaker volume (0–7) |
 | Tutor Level | Number | Difficulty — how many keys the cat must press to get food (0–7) |
+| Mode | Select | Switch between Normal / Tutor / Concert modes |
 | Dispense Now | Button | Immediately dispense one portion |
 
 ### Modes explained

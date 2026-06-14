@@ -34,6 +34,8 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=60)   # poll every 60 s — less hammering
+WRITE_RETRIES = 3                        # how many times to retry a write
+WRITE_RETRY_DELAY = 2.0                  # seconds between write retries
 
 
 class PetPianoData:
@@ -174,16 +176,22 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         self.address = address
         self._lock = asyncio.Lock()
         self._last_tutor_level: int = 1  # remember level across mode switches
+        # Cache of last known raw int values per characteristic UUID.
+        # Used by write methods so we don't need to re-read before every write.
+        self._cached_raw: dict[str, int] = {}
 
     # ── internal BLE helpers ────────────────────────────────────────────────
 
-    def _make_client(self) -> BleakClient:
+    def _get_ble_device(self) -> BLEDevice:
         ble_device: BLEDevice | None = async_ble_device_from_address(
             self.hass, self.address, connectable=True
         )
         if ble_device is None:
             raise UpdateFailed(f"PetPiano ({self.address}) not in BLE scanner cache")
-        return BleakClient(ble_device, timeout=20.0)
+        return ble_device
+
+    def _make_client(self) -> BleakClient:
+        return BleakClient(self._get_ble_device(), timeout=20.0)
 
     async def _read_char(self, client: BleakClient, uuid: str) -> bytes:
         try:
@@ -207,30 +215,64 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             except BleakError as e2:
                 _LOGGER.error("Failed to write %s: %s", uuid[:8], e2)
 
+    async def _write_cached(self, uuid: str, new_value: int) -> bool:
+        """Write a characteristic value using cached state (no pre-read needed).
+
+        Retries up to WRITE_RETRIES times.  Returns True on success.
+        The caller is responsible for holding self._lock.
+        """
+        for attempt in range(1, WRITE_RETRIES + 1):
+            try:
+                ble_device = async_ble_device_from_address(
+                    self.hass, self.address, connectable=True
+                )
+                if ble_device is None:
+                    _LOGGER.warning(
+                        "Write %s attempt %d/%d: device not in BLE cache — waiting",
+                        uuid[:8], attempt, WRITE_RETRIES,
+                    )
+                    await asyncio.sleep(WRITE_RETRY_DELAY)
+                    continue
+                async with BleakClient(ble_device, timeout=15.0) as client:
+                    await client.write_gatt_char(
+                        uuid, int_to_bytes(new_value), response=False
+                    )
+                    self._cached_raw[uuid] = new_value  # keep cache in sync
+                    _LOGGER.info(
+                        "Written %s → 0x%08X (attempt %d/%d)",
+                        uuid[:8], new_value, attempt, WRITE_RETRIES,
+                    )
+                    return True
+            except (BleakError, asyncio.TimeoutError) as exc:
+                _LOGGER.warning(
+                    "Write %s attempt %d/%d failed: %s",
+                    uuid[:8], attempt, WRITE_RETRIES, exc,
+                )
+                if attempt < WRITE_RETRIES:
+                    await asyncio.sleep(WRITE_RETRY_DELAY)
+        _LOGGER.error("Write %s failed after %d attempts", uuid[:8], WRITE_RETRIES)
+        return False
+
     # ── sync time to device ─────────────────────────────────────────────────
 
     async def async_sync_rtc(self) -> None:
         """Explicitly sync phone time to device RTC (call manually, not on every poll)."""
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    now = datetime.now()
-                    hour12 = now.hour % 12 or 12
-                    ampm = 1 if now.hour >= 12 else 0
-
-                    raw = await self._read_char(client, CHAR2_RTC_UUID)
-                    v = bytes_to_int(raw)
-                    v = set_field(v, *CHAR2_SECONDS, now.second)
-                    v = set_field(v, *CHAR2_MINUTE,  now.minute)
-                    v = set_field(v, *CHAR2_HOUR,    hour12)
-                    v = set_field(v, *CHAR2_AMPM,    ampm)
-                    v = set_field(v, *CHAR2_DAY,     now.day)
-                    v = set_field(v, *CHAR2_MONTH,   now.month)
-                    await self._write_char(client, CHAR2_RTC_UUID, int_to_bytes(v))
-                    _LOGGER.info("RTC synced to %s", now.strftime("%H:%M:%S %d/%m"))
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("RTC sync failed: %s", e)
+            now = datetime.now()
+            hour12 = now.hour % 12 or 12
+            ampm = 1 if now.hour >= 12 else 0
+            v = self._cached(CHAR2_RTC_UUID)
+            v = set_field(v, *CHAR2_SECONDS, now.second)
+            v = set_field(v, *CHAR2_MINUTE,  now.minute)
+            v = set_field(v, *CHAR2_HOUR,    hour12)
+            v = set_field(v, *CHAR2_AMPM,    ampm)
+            v = set_field(v, *CHAR2_DAY,     now.day)
+            v = set_field(v, *CHAR2_MONTH,   now.month)
+            ok = await self._write_cached(CHAR2_RTC_UUID, v)
+            if ok:
+                _LOGGER.info("RTC synced to %s", now.strftime("%H:%M:%S %d/%m"))
+            else:
+                _LOGGER.error("RTC sync failed after %d attempts", WRITE_RETRIES)
 
     # ── coordinator update ──────────────────────────────────────────────────
 
@@ -272,6 +314,12 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             raw4 = await self._read_char(client, CHAR4_SETTINGS2_UUID)
             raw2 = await self._read_char(client, CHAR2_RTC_UUID)
             raw3 = await self._read_char(client, CHAR3_SCHEDULE_UUID)
+
+        # Update raw-int cache so write methods can use it without re-reading
+        self._cached_raw[CHAR1_SETTINGS_UUID] = bytes_to_int(raw1)
+        self._cached_raw[CHAR4_SETTINGS2_UUID] = bytes_to_int(raw4)
+        self._cached_raw[CHAR2_RTC_UUID]       = bytes_to_int(raw2)
+        self._cached_raw[CHAR3_SCHEDULE_UUID]  = bytes_to_int(raw3)
 
         # Decode outside the connection (no need to stay connected)
         result.raw = {
@@ -327,117 +375,101 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         return result
 
     # ── public write methods ────────────────────────────────────────────────
+    # All write methods:
+    #   1. Build new value from _cached_raw (no extra BLE read needed)
+    #   2. Apply optimistic update to coordinator.data so the UI reflects
+    #      the change immediately — no waiting for the next 60 s poll
+    #   3. Write to device via _write_cached (retries up to WRITE_RETRIES)
+    #   4. Trigger a fast refresh so HA verifies the write succeeded
 
-    async def _write_action(self, uuid: str, value: int) -> None:
-        """Connect, read, modify, write — with lock."""
-        async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, uuid)
-                    await self._write_char(client, uuid, int_to_bytes(value))
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Write action failed: %s", e)
+    def _cached(self, uuid: str) -> int:
+        """Return last known raw int for a characteristic (0 if never read)."""
+        return self._cached_raw.get(uuid, 0)
+
+    def _optimistic_update(self) -> None:
+        """Push current coordinator.data immediately to all listeners."""
+        if self.data is not None:
+            self.async_set_updated_data(self.data)
 
     async def async_dispense_now(self) -> None:
         """Trigger manual food dispense."""
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
-                    v = bytes_to_int(raw)
-                    v = set_field(v, *CHAR1_MANUAL_DISPENSE, 1)
-                    await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    _LOGGER.info("Manual dispense triggered")
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Dispense failed: %s", e)
+            v = set_field(self._cached(CHAR1_SETTINGS_UUID), *CHAR1_MANUAL_DISPENSE, 1)
+            await self._write_cached(CHAR1_SETTINGS_UUID, v)
+            _LOGGER.info("Manual dispense triggered")
 
     async def async_set_volume(self, volume: int) -> None:
         """Set volume (0-7)."""
+        clamped = max(0, min(7, volume))
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR4_SETTINGS2_UUID)
-                    v = bytes_to_int(raw)
-                    v = set_field(v, *CHAR4_VOLUME, max(0, min(7, volume)))
-                    await self._write_char(client, CHAR4_SETTINGS2_UUID, int_to_bytes(v))
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Set volume failed: %s", e)
+            v = set_field(self._cached(CHAR4_SETTINGS2_UUID), *CHAR4_VOLUME, clamped)
+            ok = await self._write_cached(CHAR4_SETTINGS2_UUID, v)
+            if ok and self.data is not None:
+                self.data.volume = clamped
+                self._optimistic_update()
 
     async def async_set_tutor_level(self, level: int) -> None:
         """Set tutor difficulty level (0-7) — controls how many keys cat must play."""
+        clamped = max(0, min(7, level))
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
-                    v = bytes_to_int(raw)
-                    clamped = max(0, min(7, level))
-                    v = set_field(v, *CHAR1_TUTOR_LEVEL, clamped)
-                    await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    if clamped > 0:
-                        self._last_tutor_level = clamped  # remember for mode switches
-                    _LOGGER.info("Tutor level set to %d", clamped)
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Set tutor level failed: %s", e)
+            v = set_field(self._cached(CHAR1_SETTINGS_UUID), *CHAR1_TUTOR_LEVEL, clamped)
+            ok = await self._write_cached(CHAR1_SETTINGS_UUID, v)
+            if ok:
+                if clamped > 0:
+                    self._last_tutor_level = clamped
+                if self.data is not None:
+                    self.data.tutor_level = clamped
+                    self._optimistic_update()
+            _LOGGER.info("Tutor level set to %d (ok=%s)", clamped, ok)
 
     async def async_set_schedule_enabled(self, enabled: bool) -> None:
         """Enable or disable the feeding schedule."""
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR4_SETTINGS2_UUID)
-                    v = bytes_to_int(raw)
-                    v = set_field(v, *CHAR4_SCHEDULE_ENABLE, int(enabled))
-                    await self._write_char(client, CHAR4_SETTINGS2_UUID, int_to_bytes(v))
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Set schedule enabled failed: %s", e)
+            v = set_field(self._cached(CHAR4_SETTINGS2_UUID), *CHAR4_SCHEDULE_ENABLE, int(enabled))
+            ok = await self._write_cached(CHAR4_SETTINGS2_UUID, v)
+            if ok and self.data is not None:
+                self.data.schedule_enabled = enabled
+                self._optimistic_update()
 
     async def async_set_mode(self, mode: int) -> None:
         """Set operating mode from APK-confirmed logic:
-        - Tutor:   write g$CurrentLevel (bits 24-26) = 1-7, DON'T touch bits 0-1
+        - Tutor:   write g$CurrentLevel (bits 24-26) = 1-7, clear bits 0-1
         - Normal:  write g$CurrentLevel = 0, bits 0-1 = 0
         - Concert: write g$Mode (bits 0-1) = 1, g$CurrentLevel = 0
         """
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR1_SETTINGS_UUID)
-                    v = bytes_to_int(raw)
-                    _LOGGER.info("Set mode %d: CHAR1 before=0x%08X", mode, v)
+            v = self._cached(CHAR1_SETTINGS_UUID)
+            _LOGGER.info("Set mode %d: CHAR1 cached=0x%08X", mode, v)
 
-                    # Always clear ManualDispense — APK (p$ResetDinnerBell) does this explicitly
-                    v = set_field(v, *CHAR1_MANUAL_DISPENSE, 0)
+            # Always clear ManualDispense — APK (p$ResetDinnerBell) does this explicitly
+            v = set_field(v, *CHAR1_MANUAL_DISPENSE, 0)
 
-                    if mode == 1:  # Tutor
-                        # Clear Concert bits, restore saved level
-                        v = set_field(v, *CHAR1_MODE, 0)           # clear bits 0-1
-                        level = self._last_tutor_level or 1
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, max(1, min(7, level)))
-                    elif mode == 2:  # Concert
-                        # Save current level before clearing
-                        current_level = get_field(v, *CHAR1_TUTOR_LEVEL)
-                        if current_level > 0:
-                            self._last_tutor_level = current_level
-                        v = set_field(v, *CHAR1_MODE, 1)            # bits 0-1 = 1
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)     # clear level
-                    else:  # Normal
-                        # Save current level before clearing
-                        current_level = get_field(v, *CHAR1_TUTOR_LEVEL)
-                        if current_level > 0:
-                            self._last_tutor_level = current_level
-                        v = set_field(v, *CHAR1_MODE, 0)
-                        v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
+            if mode == 1:  # Tutor
+                v = set_field(v, *CHAR1_MODE, 0)
+                level = self._last_tutor_level or 1
+                v = set_field(v, *CHAR1_TUTOR_LEVEL, max(1, min(7, level)))
+            elif mode == 2:  # Concert
+                current_level = get_field(v, *CHAR1_TUTOR_LEVEL)
+                if current_level > 0:
+                    self._last_tutor_level = current_level
+                v = set_field(v, *CHAR1_MODE, 1)
+                v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
+            else:  # Normal
+                current_level = get_field(v, *CHAR1_TUTOR_LEVEL)
+                if current_level > 0:
+                    self._last_tutor_level = current_level
+                v = set_field(v, *CHAR1_MODE, 0)
+                v = set_field(v, *CHAR1_TUTOR_LEVEL, 0)
 
-                    _LOGGER.info("Set mode %d: CHAR1 writing=0x%08X", mode, v)
-                    await self._write_char(client, CHAR1_SETTINGS_UUID, int_to_bytes(v))
-                    _LOGGER.info("Set mode %d: write done", mode)
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Set mode failed: %s", e)
+            _LOGGER.info("Set mode %d: CHAR1 writing=0x%08X", mode, v)
+            ok = await self._write_cached(CHAR1_SETTINGS_UUID, v)
+            if ok and self.data is not None:
+                self.data.mode = mode
+                if mode == 1:
+                    self.data.tutor_level = self._last_tutor_level or 1
+                else:
+                    self.data.tutor_level = 0
+                self._optimistic_update()
 
     async def async_set_meal_time(self, meal: int, hour12: int, minute_qh: int, ampm: int) -> None:
         """Set meal time. hour12=1-12, minute_qh=0/15/30/45, ampm=0/1."""
@@ -455,20 +487,22 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         if meal not in fields:
             return
         f_hour, f_min, f_ampm = fields[meal]
-        qh = QUARTER_HOUR_REVERSE.get(minute_qh, 0)  # convert :00/:15/:30/:45 → 0/1/2/3
+        qh = QUARTER_HOUR_REVERSE.get(minute_qh, 0)
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR3_SCHEDULE_UUID)
-                    v = bytes_to_int(raw)
-                    v = set_field(v, *f_hour, max(1, min(12, hour12)))
-                    v = set_field(v, *f_min,  qh)
-                    v = set_field(v, *f_ampm, ampm)
-                    await self._write_char(client, CHAR3_SCHEDULE_UUID, int_to_bytes(v))
-                    _LOGGER.info("Meal %d time set to %02d:%02d %s", meal, hour12, minute_qh, "PM" if ampm else "AM")
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Set meal time failed: %s", e)
+            v = self._cached(CHAR3_SCHEDULE_UUID)
+            v = set_field(v, *f_hour, max(1, min(12, hour12)))
+            v = set_field(v, *f_min,  qh)
+            v = set_field(v, *f_ampm, ampm)
+            ok = await self._write_cached(CHAR3_SCHEDULE_UUID, v)
+            if ok and self.data is not None:
+                setattr(self.data, f"meal{meal}_hour",   hour12)
+                setattr(self.data, f"meal{meal}_minute", minute_qh)
+                setattr(self.data, f"meal{meal}_ampm",   ampm)
+                self._optimistic_update()
+            _LOGGER.info(
+                "Meal %d time set to %02d:%02d %s (ok=%s)",
+                meal, hour12, minute_qh, "PM" if ampm else "AM", ok,
+            )
 
     async def async_set_meal_active(self, meal: int, active: bool) -> None:
         """Enable or disable a meal slot (meal=1,2,3)."""
@@ -481,13 +515,9 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         if not field:
             return
         async with self._lock:
-            try:
-                client = self._make_client()
-                async with client:
-                    raw = await self._read_char(client, CHAR3_SCHEDULE_UUID)
-                    v = bytes_to_int(raw)
-                    v = set_field(v, *field, int(active))
-                    await self._write_char(client, CHAR3_SCHEDULE_UUID, int_to_bytes(v))
-                    _LOGGER.info("Meal %d active=%s", meal, active)
-            except (BleakError, asyncio.TimeoutError) as e:
-                _LOGGER.error("Set meal active failed: %s", e)
+            v = set_field(self._cached(CHAR3_SCHEDULE_UUID), *field, int(active))
+            ok = await self._write_cached(CHAR3_SCHEDULE_UUID, v)
+            if ok and self.data is not None:
+                setattr(self.data, f"meal{meal}_active", active)
+                self._optimistic_update()
+            _LOGGER.info("Meal %d active=%s (ok=%s)", meal, active, ok)
