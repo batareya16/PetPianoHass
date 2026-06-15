@@ -213,13 +213,10 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         return client
 
     async def _read_char(self, client: BleakClient, uuid: str) -> bytes:
-        try:
-            data = await client.read_gatt_char(uuid)
-            _LOGGER.debug("Read %s → %s (%d bytes)", uuid[:8], data.hex(), len(data))
-            return data
-        except BleakError as e:
-            _LOGGER.warning("Failed to read %s: %s", uuid[:8], e)
-            return b"\x00\x00\x00\x00"
+        """Read a characteristic — raises BleakError on failure (let the retry loop handle it)."""
+        data = await client.read_gatt_char(uuid)
+        _LOGGER.debug("Read %s → %s (%d bytes)", uuid[:8], data.hex(), len(data))
+        return data
 
     async def _write_cached(self, uuid: str, new_value: int) -> bool:
         """Write a characteristic value using cached state (no pre-read needed).
@@ -233,6 +230,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             try:
                 client = await self._connect()
                 async with client:
+                    await asyncio.sleep(0.5)  # device needs a moment after connect
                     await client.write_gatt_char(
                         uuid, int_to_bytes(new_value), response=False
                     )
@@ -308,6 +306,10 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         client = await self._connect()
         async with client:
             _LOGGER.debug("Connected to PetPiano %s", self.address)
+            # Small delay after connection: cheap BLE devices (including PetPiano)
+            # respond to connection but aren't ready for GATT reads immediately,
+            # causing ATT 0x0e (Unlikely Error) on the very first read.
+            await asyncio.sleep(0.5)
 
             raw1 = await self._read_char(client, CHAR1_SETTINGS_UUID)
             raw4 = await self._read_char(client, CHAR4_SETTINGS2_UUID)
