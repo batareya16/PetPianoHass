@@ -3,7 +3,7 @@
   "name": "Pet Piano",
   "version": "0.1.0",
   "documentation": "https://github.com/your-repo/pet_piano",
-  "requirements": ["bleak-retry-connector>=3.0.0"],
+  "requirements": [],
   "dependencies": ["bluetooth"],
   "codeowners": [],
   "iot_class": "local_polling",

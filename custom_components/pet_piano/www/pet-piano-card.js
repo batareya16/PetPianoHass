@@ -4,6 +4,10 @@ class PetPianoCard extends HTMLElement {
     this._initialized = false;
     this._volDragging = false;
     this._levelDragging = false;
+    this._pending = false;
+    this._pendingTimer = null;
+    // Track expected values so we can auto-clear pending when HA confirms them
+    this._expected = {};
   }
 
   set hass(hass) {
@@ -39,8 +43,46 @@ class PetPianoCard extends HTMLElement {
     return isNaN(v) ? fallback : v;
   }
 
+  // ── Pending indicator ───────────────────────────────────────────────────────
+  // Call _markPending(entityKey, expectedValue) right before each service call.
+  // The indicator clears automatically when HA reports the expected value,
+  // or after 10 s (max 3 BLE retry attempts × ~3 s each).
+
+  _markPending(entityKey, expectedValue) {
+    if (entityKey !== undefined) this._expected[entityKey] = expectedValue;
+    this._pending = true;
+    clearTimeout(this._pendingTimer);
+    this._pendingTimer = setTimeout(() => this._clearPending(), 10000);
+    this._renderStatus();
+  }
+
+  _clearPending() {
+    this._pending = false;
+    this._expected = {};
+    clearTimeout(this._pendingTimer);
+    this._pendingTimer = null;
+    this._renderStatus();
+  }
+
+  _checkPendingResolved() {
+    // If all expected values match current HA state, clear the pending indicator
+    if (!this._pending || !Object.keys(this._expected).length) return;
+    const allMatch = Object.entries(this._expected).every(([key, val]) => {
+      const cur = this._state(key, null);
+      return cur !== null && String(cur) === String(val);
+    });
+    if (allMatch) this._clearPending();
+  }
+
   _buildDOM() {
     this.innerHTML = `
+<style>
+  @keyframes pp-pulse {
+    0%,100% { opacity:1 }
+    50%      { opacity:.45 }
+  }
+  .pp-syncing { animation: pp-pulse 1.2s ease-in-out infinite }
+</style>
 <ha-card>
   <div style="padding:16px;font-family:var(--paper-font-body1_-_font-family,Roboto)">
 
@@ -176,6 +218,7 @@ class PetPianoCard extends HTMLElement {
     dispense.onclick = () => {
       dispense.textContent = "Dispensing…";
       dispense.disabled = true;
+      this._markPending();
       this._hass.callService("button", "press", { entity_id: "button.pet_piano_dispense_now" })
         .finally(() => setTimeout(() => { dispense.textContent = "Dispense now"; dispense.disabled = false; }, 2000));
     };
@@ -184,6 +227,7 @@ class PetPianoCard extends HTMLElement {
     const sync = this.querySelector(".pp-sync");
     sync.onclick = () => {
       sync.textContent = "Syncing…";
+      this._markPending();
       this._hass.callService("button", "press", { entity_id: "button.pet_piano_sync_rtc" })
         .finally(() => setTimeout(() => { sync.textContent = "Sync time"; }, 1500));
     };
@@ -191,6 +235,7 @@ class PetPianoCard extends HTMLElement {
     // Schedule toggle
     this.querySelector(".pp-sched-toggle").onclick = () => {
       const schedOn = this._state("switch.pet_piano_schedule") === "on";
+      this._markPending("switch.pet_piano_schedule", schedOn ? "off" : "on");
       this._hass.callService("switch", schedOn ? "turn_off" : "turn_on", { entity_id: "switch.pet_piano_schedule" });
     };
 
@@ -204,7 +249,9 @@ class PetPianoCard extends HTMLElement {
     };
     volSlider.onchange = (e) => {
       this._volDragging = false;
-      this._hass.callService("number", "set_value", { entity_id: "number.pet_piano_volume", value: parseInt(e.target.value) });
+      const val = parseInt(e.target.value);
+      this._markPending("number.pet_piano_volume", val);
+      this._hass.callService("number", "set_value", { entity_id: "number.pet_piano_volume", value: val });
     };
 
     // Level slider
@@ -213,12 +260,15 @@ class PetPianoCard extends HTMLElement {
     levelSlider.addEventListener("touchstart", () => this._levelDragging = true);
     levelSlider.onchange = (e) => {
       this._levelDragging = false;
-      this._hass.callService("number", "set_value", { entity_id: "number.pet_piano_tutor_level", value: parseInt(e.target.value) });
+      const val = parseInt(e.target.value);
+      this._markPending("number.pet_piano_tutor_level", val);
+      this._hass.callService("number", "set_value", { entity_id: "number.pet_piano_tutor_level", value: val });
     };
 
     // Mode buttons
     this.querySelectorAll("[data-mode]").forEach(btn => {
       btn.onclick = () => {
+        this._markPending("sensor.pet_piano_mode", btn.dataset.mode);
         this._hass.callService("select", "select_option", {
           entity_id: "select.pet_piano_mode",
           option: btn.dataset.mode
@@ -236,6 +286,7 @@ class PetPianoCard extends HTMLElement {
 
   _update() {
     if (!this._hass || !this._config) return;
+    this._checkPendingResolved();
 
     const battery   = this._num("sensor.pet_piano_battery", 0);
     const food      = this._num("sensor.pet_piano_food_level", 0);
@@ -258,14 +309,8 @@ class PetPianoCard extends HTMLElement {
 
     // Subtitle & status
     this.querySelector(".pp-subtitle").textContent = `${wallPower ? "Wall power" : "Battery"} · Vol ${volume}/7`;
-    const status = this.querySelector(".pp-status");
-    if (motorJam) {
-      status.textContent = "Motor jam!";
-      status.style.cssText = "font-size:11px;padding:3px 10px;border-radius:20px;background:#fff3e0;color:#e65100;font-weight:500";
-    } else {
-      status.textContent = "Online";
-      status.style.cssText = "font-size:11px;padding:3px 10px;border-radius:20px;background:#e8f5e9;color:#2e7d32;font-weight:500";
-    }
+    this._motorJam = motorJam;
+    this._renderStatus();
 
     // Mode tabs
     this.querySelectorAll("[data-mode]").forEach(btn => {
@@ -335,6 +380,24 @@ class PetPianoCard extends HTMLElement {
       timeEl.textContent = time;
       timeEl.style.color = disabled ? "var(--secondary-text-color)" : "var(--primary-text-color)";
     });
+  }
+
+  _renderStatus() {
+    const status = this.querySelector(".pp-status");
+    if (!status) return;
+    if (this._pending) {
+      status.textContent = "Syncing…";
+      status.className = "pp-status pp-syncing";
+      status.style.cssText = "font-size:11px;padding:3px 10px;border-radius:20px;background:#fff8e1;color:#f57f17;font-weight:500";
+    } else if (this._motorJam) {
+      status.textContent = "Motor jam!";
+      status.className = "pp-status";
+      status.style.cssText = "font-size:11px;padding:3px 10px;border-radius:20px;background:#fff3e0;color:#e65100;font-weight:500";
+    } else {
+      status.textContent = "Online";
+      status.className = "pp-status";
+      status.style.cssText = "font-size:11px;padding:3px 10px;border-radius:20px;background:#e8f5e9;color:#2e7d32;font-weight:500";
+    }
   }
 
   getCardSize() { return 5; }
