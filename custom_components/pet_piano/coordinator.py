@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from bleak import BleakClient, BleakError
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
-    BleakClientWithServiceCache,
     establish_connection,
     BleakNotFoundError,
 )
@@ -195,22 +194,23 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             raise UpdateFailed(f"PetPiano ({self.address}) not in BLE scanner cache")
         return ble_device
 
-    async def _connect(self) -> BleakClientWithServiceCache:
+    async def _connect(self) -> BleakClient:
         """Connect using bleak_retry_connector.
 
-        This library pauses the HA BLE scanner during connection negotiation,
-        which fixes ATT 0x0e (Unlikely Error) caused by scanner/GATT conflicts
-        on Linux/BlueZ.  It also caches GATT service discovery so subsequent
-        connects are significantly faster.
+        establish_connection pauses the HA BLE scanner during negotiation —
+        this is what fixes ATT 0x0e (Unlikely Error) on Linux/BlueZ.
+        We use plain BleakClient (not BleakClientWithServiceCache) because
+        PetPiano disconnects during GATT service discovery on the cached variant.
+        timeout=30.0 gives the device enough time to complete the handshake.
         """
         ble_device = self._get_ble_device()
-        client = await establish_connection(
-            BleakClientWithServiceCache,
+        return await establish_connection(
+            BleakClient,
             ble_device,
             self.address,
-            max_attempts=2,       # establish_connection handles its own retries
+            max_attempts=3,
+            timeout=30.0,
         )
-        return client
 
     async def _read_char(self, client: BleakClient, uuid: str) -> bytes:
         """Read a characteristic — raises BleakError on failure (let the retry loop handle it)."""
