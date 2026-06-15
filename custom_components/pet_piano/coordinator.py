@@ -7,6 +7,11 @@ from datetime import datetime, timedelta
 
 from bleak import BleakClient, BleakError
 from bleak.backends.device import BLEDevice
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    establish_connection,
+    BleakNotFoundError,
+)
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.core import HomeAssistant
@@ -190,8 +195,22 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             raise UpdateFailed(f"PetPiano ({self.address}) not in BLE scanner cache")
         return ble_device
 
-    def _make_client(self) -> BleakClient:
-        return BleakClient(self._get_ble_device(), timeout=20.0)
+    async def _connect(self) -> BleakClientWithServiceCache:
+        """Connect using bleak_retry_connector.
+
+        This library pauses the HA BLE scanner during connection negotiation,
+        which fixes ATT 0x0e (Unlikely Error) caused by scanner/GATT conflicts
+        on Linux/BlueZ.  It also caches GATT service discovery so subsequent
+        connects are significantly faster.
+        """
+        ble_device = self._get_ble_device()
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            self.address,
+            max_attempts=2,       # establish_connection handles its own retries
+        )
+        return client
 
     async def _read_char(self, client: BleakClient, uuid: str) -> bytes:
         try:
@@ -202,38 +221,18 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             _LOGGER.warning("Failed to read %s: %s", uuid[:8], e)
             return b"\x00\x00\x00\x00"
 
-    async def _write_char(self, client: BleakClient, uuid: str, data: bytes) -> None:
-        """Write characteristic — try without response first (matches App Inventor behaviour)."""
-        _LOGGER.debug("Write %s → %s (%d bytes)", uuid[:8], data.hex(), len(data))
-        try:
-            # App Inventor BLE sends WriteCommand (no response) — try that first
-            await client.write_gatt_char(uuid, data, response=False)
-        except BleakError as e1:
-            _LOGGER.debug("Write no-response failed (%s), trying with response", e1)
-            try:
-                await client.write_gatt_char(uuid, data, response=True)
-            except BleakError as e2:
-                _LOGGER.error("Failed to write %s: %s", uuid[:8], e2)
-
     async def _write_cached(self, uuid: str, new_value: int) -> bool:
         """Write a characteristic value using cached state (no pre-read needed).
 
+        Uses establish_connection (bleak_retry_connector) so the BLE scanner
+        is paused during connect — prevents ATT 0x0e Unlikely Error on BlueZ.
         Retries up to WRITE_RETRIES times.  Returns True on success.
         The caller is responsible for holding self._lock.
         """
         for attempt in range(1, WRITE_RETRIES + 1):
             try:
-                ble_device = async_ble_device_from_address(
-                    self.hass, self.address, connectable=True
-                )
-                if ble_device is None:
-                    _LOGGER.warning(
-                        "Write %s attempt %d/%d: device not in BLE cache — waiting",
-                        uuid[:8], attempt, WRITE_RETRIES,
-                    )
-                    await asyncio.sleep(WRITE_RETRY_DELAY)
-                    continue
-                async with BleakClient(ble_device, timeout=15.0) as client:
+                client = await self._connect()
+                async with client:
                     await client.write_gatt_char(
                         uuid, int_to_bytes(new_value), response=False
                     )
@@ -243,7 +242,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
                         uuid[:8], new_value, attempt, WRITE_RETRIES,
                     )
                     return True
-            except (BleakError, asyncio.TimeoutError) as exc:
+            except (BleakError, BleakNotFoundError, asyncio.TimeoutError, UpdateFailed) as exc:
                 _LOGGER.warning(
                     "Write %s attempt %d/%d failed: %s",
                     uuid[:8], attempt, WRITE_RETRIES, exc,
@@ -256,7 +255,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
     # ── sync time to device ─────────────────────────────────────────────────
 
     async def async_sync_rtc(self) -> None:
-        """Explicitly sync phone time to device RTC (call manually, not on every poll)."""
+        """Explicitly sync HA time to device RTC."""
         async with self._lock:
             now = datetime.now()
             hour12 = now.hour % 12 or 12
@@ -288,7 +287,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             try:
                 async with self._lock:
                     return await self._do_read()
-            except (BleakError, asyncio.TimeoutError) as e:
+            except (BleakError, BleakNotFoundError, asyncio.TimeoutError, UpdateFailed) as e:
                 err = str(e)
                 _LOGGER.warning("Poll attempt %d/3 failed: %s", attempt + 1, err)
                 if attempt < 2:
@@ -306,7 +305,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
     async def _do_read(self) -> PetPianoData:
         """Single BLE session: connect, read all 4 chars, disconnect."""
         result = PetPianoData()
-        client = self._make_client()
+        client = await self._connect()
         async with client:
             _LOGGER.debug("Connected to PetPiano %s", self.address)
 
