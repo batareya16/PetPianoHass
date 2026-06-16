@@ -18,8 +18,8 @@ Pet Piano is a device that sits in front of your cat. It plays melodies and rewa
 | Entity | Type | Description |
 |---|---|---|
 | Battery | Sensor | Battery level in % |
-| Food Level | Sensor | Hopper fill level (0–7) |
 | Portions Today | Sensor | How many portions have been dispensed today |
+| Grams Today | Sensor | Grams of food dispensed today (portions × grams_per_portion) |
 | Mode | Sensor | Current operating mode (Normal / Tutor / Concert) |
 | Device Time | Sensor | Internal RTC clock of the device |
 | Meal 1 / 2 / 3 Time | Time | Set scheduled feeding time for each meal slot (rounded to :00 / :15 / :30 / :45) |
@@ -110,10 +110,36 @@ The Pet Piano exposes a custom BLE GATT service with 4 characteristics. Each cha
 |---|---|---|
 | Settings 1 | `34333333-2222-2222-1111-111100000000` | Mode, battery, portions, motor status |
 | Settings 2 | `35333333-2222-2222-1111-111100000000` | Volume, meal sizes, max portions |
-| RTC Clock | `36333333-2222-2222-1111-111100000000` | Device time, food level sensor |
+| RTC Clock | `36333333-2222-2222-1111-111100000000` | Device time (seconds, minute, hour, AM/PM, day, month) |
 | Schedule | `37333333-2222-2222-1111-111100000000` | Three meal times with AM/PM and active flags |
 
 The integration polls every 60 seconds. On failed connections it retries up to 3 times with backoff, and keeps showing the last known values rather than marking the device unavailable.
+
+---
+
+## Calibrating grams per portion
+
+The **Grams Today** sensor multiplies `portions_today` by a configurable `grams_per_portion` value (default: 5 g).
+
+To calibrate for your food:
+
+1. Place an empty bowl on a kitchen scale and zero it
+2. Go to **Settings → Devices & Services → Pet Piano → Configure**
+3. Trigger one manual dispense (or let a scheduled meal fire)
+4. Weigh the result — that number in grams is your `grams_per_portion`
+5. Enter it in the options dialog and save
+
+The sensor updates immediately without restarting Home Assistant.
+
+Once you have accurate gram data, you can build a separate HA template sensor to track calories:
+```yaml
+template:
+  - sensor:
+      - name: "Cat calories today"
+        unit_of_measurement: kcal
+        state: "{{ states('sensor.pet_piano_grams_today') | float * 3.5 }}"
+        # Replace 3.5 with your food's kcal/g value (check the packaging)
+```
 
 ---
 

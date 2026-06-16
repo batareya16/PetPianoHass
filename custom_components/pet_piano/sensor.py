@@ -35,18 +35,19 @@ SENSORS: tuple[PetPianoSensorDescription, ...] = (
         value_fn=lambda d: d.battery,
     ),
     PetPianoSensorDescription(
-        key="food_level",
-        name="Food Level",
-        icon="mdi:food-drumstick",
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.food_level,
-    ),
-    PetPianoSensorDescription(
         key="portions_today",
         name="Portions Today",
         icon="mdi:bowl",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.portions_today,
+    ),
+    PetPianoSensorDescription(
+        key="grams_today",
+        name="Grams Today",
+        icon="mdi:weight-gram",
+        native_unit_of_measurement="g",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda d: d.grams_today,
     ),
     PetPianoSensorDescription(
         key="mode",

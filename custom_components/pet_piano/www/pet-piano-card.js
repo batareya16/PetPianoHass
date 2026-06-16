@@ -127,9 +127,9 @@ class PetPianoCard extends HTMLElement {
         </div>
       </div>
       <div style="background:var(--secondary-background-color,#f5f5f5);border-radius:8px;padding:10px 12px">
-        <div style="font-size:11px;color:var(--secondary-text-color);margin-bottom:4px">Food level</div>
-        <div class="pp-food-val" style="font-size:20px;font-weight:500;color:var(--primary-text-color);line-height:1"></div>
-        <div class="pp-food-dots" style="display:flex;gap:3px;margin-top:6px"></div>
+        <div style="font-size:11px;color:var(--secondary-text-color);margin-bottom:4px">Grams today</div>
+        <div class="pp-grams-val" style="font-size:20px;font-weight:500;color:var(--primary-text-color);line-height:1"></div>
+        <div class="pp-grams-unit" style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">g</div>
       </div>
       <div style="background:var(--secondary-background-color,#f5f5f5);border-radius:8px;padding:10px 12px">
         <div style="font-size:11px;color:var(--secondary-text-color);margin-bottom:4px">Today</div>
@@ -201,15 +201,6 @@ class PetPianoCard extends HTMLElement {
       this._volBars.push(b);
     }
 
-    // Build food dots once
-    const dotsEl = this.querySelector(".pp-food-dots");
-    this._foodDots = [];
-    for (let i = 0; i < 7; i++) {
-      const d = document.createElement("div");
-      d.style.cssText = "width:8px;height:8px;border-radius:50%";
-      dotsEl.appendChild(d);
-      this._foodDots.push(d);
-    }
   }
 
   _attachHandlers() {
@@ -289,7 +280,8 @@ class PetPianoCard extends HTMLElement {
     this._checkPendingResolved();
 
     const battery   = this._num("sensor.pet_piano_battery", 0);
-    const food      = this._num("sensor.pet_piano_food_level", 0);
+    const gramsRaw  = this._state("sensor.pet_piano_grams_today", null);
+    const grams     = (gramsRaw === null || gramsRaw === "unknown" || gramsRaw === "unavailable") ? null : parseFloat(gramsRaw);
     const portions  = this._num("sensor.pet_piano_portions_today", 0);
     const mode      = this._state("sensor.pet_piano_mode", "Normal");
     const volume    = this._num("number.pet_piano_volume", 3);
@@ -324,9 +316,9 @@ class PetPianoCard extends HTMLElement {
     batBar.style.background = battColor;
     batBar.style.width = battery + "%";
 
-    // Food
-    this.querySelector(".pp-food-val").innerHTML = `${food}<span style="font-size:12px">/7</span>`;
-    this._foodDots.forEach((d, i) => { d.style.background = i < food ? battColor : "var(--divider-color,#e0e0e0)"; });
+    // Grams
+    this.querySelector(".pp-grams-val").textContent = grams !== null ? grams : "—";
+    this.querySelector(".pp-grams-unit").style.visibility = grams !== null ? "visible" : "hidden";
 
     // Portions
     this.querySelector(".pp-portions-val").textContent = portions;

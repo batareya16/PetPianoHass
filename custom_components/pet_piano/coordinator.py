@@ -24,7 +24,7 @@ from .const import (
     CHAR4_MEAL_SIZE_2, CHAR4_SCHEDULE_ENABLE,
     CHAR4_MELODY_ASSIST,
     CHAR2_SECONDS, CHAR2_MINUTE, CHAR2_HOUR,
-    CHAR2_AMPM, CHAR2_DAY, CHAR2_MONTH, CHAR2_FOOD_LEVEL,
+    CHAR2_AMPM, CHAR2_DAY, CHAR2_MONTH,
     CHAR3_MEAL1_MINUTE, CHAR3_MEAL1_HOUR, CHAR3_MEAL1_AMPM, CHAR3_MEAL1_ACTIVE,
     CHAR3_MEAL2_MINUTE, CHAR3_MEAL2_HOUR, CHAR3_MEAL2_AMPM, CHAR3_MEAL2_ACTIVE,
     CHAR3_MEAL3_MINUTE, CHAR3_MEAL3_HOUR, CHAR3_MEAL3_AMPM, CHAR3_MEAL3_ACTIVE,
@@ -70,8 +70,10 @@ class PetPianoData:
         self.rtc_ampm: int = 0        # 0=AM, 1=PM
         self.rtc_day: int = 1
         self.rtc_month: int = 1
-        self.food_level: int = 0      # 0-7: hopper fill level (read-only sensor)
-        self.tutor_level: int = 0     # 0-7: difficulty / keys required (writable)
+
+        # Derived — None if grams_per_portion not configured yet
+        self.grams_today: float | None = None
+        self.tutor_level: int = 0      # 0-7: difficulty / keys required (writable)
 
         # CHAR3 — meal schedule
         self.meal1_hour: int = 8
@@ -140,7 +142,6 @@ def _decode_char2(data: bytes) -> dict:
         "rtc_ampm":   get_field(v, *CHAR2_AMPM),
         "rtc_day":    get_field(v, *CHAR2_DAY),
         "rtc_month":  get_field(v, *CHAR2_MONTH),
-        "food_level": get_field(v, *CHAR2_FOOD_LEVEL),
     }
 
 
@@ -168,7 +169,7 @@ def _decode_char3(data: bytes) -> dict:
 class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
     """Coordinator that polls Pet Piano over BLE."""
 
-    def __init__(self, hass: HomeAssistant, address: str) -> None:
+    def __init__(self, hass: HomeAssistant, address: str, grams_per_portion: float | None = None) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -176,6 +177,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             update_interval=SCAN_INTERVAL,
         )
         self.address = address
+        self.grams_per_portion: float = grams_per_portion
         self._lock = asyncio.Lock()
         self._last_tutor_level: int = 1  # remember level across mode switches
         # Cache of last known raw int values per characteristic UUID.
@@ -345,6 +347,10 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         result.power_source   = d1["power_source"]
         result.tutor_level    = d1["tutor_level"]
         result.motor_jam      = d1["motor_jam"]
+        result.grams_today    = (
+            round(result.portions_today * self.grams_per_portion, 1)
+            if self.grams_per_portion is not None else None
+        )
 
         d4 = _decode_char4(raw4)
         result.volume           = d4["volume"]
@@ -361,7 +367,6 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
         result.rtc_ampm   = d2["rtc_ampm"]
         result.rtc_day    = d2["rtc_day"]
         result.rtc_month  = d2["rtc_month"]
-        result.food_level = d2["food_level"]
 
         d3 = _decode_char3(raw3)
         result.meal1_hour   = d3["meal1_hour"]

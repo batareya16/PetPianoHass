@@ -57,7 +57,8 @@ CHAR2_HOUR       = (12, 0x0000F000)  # 4 bits: hours 1-12   (decoded: 12) ✓ FI
 CHAR2_AMPM       = (16, 0x00010000)  # 1 bit:  0=AM, 1=PM    (decoded: 1=PM) ✓
 CHAR2_DAY        = (17, 0x003E0000)  # 5 bits: day 1-31      (decoded: 18) ✓
 CHAR2_MONTH      = (22, 0x03C00000)  # 4 bits: month 1-12    (decoded: 5=May) ✓
-CHAR2_FOOD_LEVEL = (26, 0x1C000000)  # 3 bits: food level 0-7 (decoded: 2) ✓
+# Bits 26-28 of CHAR2 are NOT documented in the APK (g$CHAR2RTC only uses bits 0-25).
+# Previously labelled "food level" but that was reverse-engineering error — removed.
 
 # ── CHAR3 (37333333) — Schedule ────────────────────────────────────────────
 # Calibrated from real device data 0x00163998

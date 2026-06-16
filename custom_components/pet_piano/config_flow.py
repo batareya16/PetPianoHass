@@ -7,16 +7,45 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import ConfigFlow, OptionsFlow
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import DOMAIN, SERVICE_UUID, DEVICE_NAME
+
+DEFAULT_GRAMS_PER_PORTION = 5.0
+
+
+class PetPianoOptionsFlow(OptionsFlow):
+    """Options flow — lets user change grams-per-portion after setup."""
+
+    async def async_step_init(self, user_input=None) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        current = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "grams_per_portion",
+                        default=current.get("grams_per_portion", DEFAULT_GRAMS_PER_PORTION),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=500.0)),
+                }
+            ),
+            description_placeholders={},
+        )
 
 
 class PetPianoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle config flow for Pet Piano."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry) -> PetPianoOptionsFlow:
+        return PetPianoOptionsFlow()
 
     def __init__(self) -> None:
         self._discovered: dict[str, str] = {}   # address → name
