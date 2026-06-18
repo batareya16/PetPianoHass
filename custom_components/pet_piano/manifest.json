@@ -5,7 +5,7 @@
   "documentation": "https://github.com/batareya16/PetPianoHass",
   "issue_tracker": "https://github.com/batareya16/PetPianoHass/issues",
   "requirements": [],
-  "dependencies": ["bluetooth"],
+  "dependencies": ["bluetooth", "http"],
   "codeowners": ["@batareya16"],
   "iot_class": "local_polling",
   "bluetooth": [
