@@ -1,18 +1,18 @@
 {
   "domain": "pet_piano",
   "name": "Pet Piano",
-  "version": "1.0.0",
-  "documentation": "https://github.com/batareya16/PetPianoHass",
-  "issue_tracker": "https://github.com/batareya16/PetPianoHass/issues",
-  "requirements": [],
-  "dependencies": ["bluetooth", "http"],
-  "codeowners": ["@batareya16"],
-  "iot_class": "local_polling",
   "bluetooth": [
     {
       "local_name": "PetPiano",
       "service_uuid": "60462f12-9543-9999-12c8-58b459a2712d"
     }
   ],
-  "config_flow": true
+  "codeowners": ["@batareya16"],
+  "config_flow": true,
+  "dependencies": ["bluetooth", "http"],
+  "documentation": "https://github.com/batareya16/PetPianoHass",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/batareya16/PetPianoHass/issues",
+  "requirements": [],
+  "version": "1.0.0"
 }
