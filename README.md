@@ -3,8 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2023.6%2B-blue.svg)](https://www.home-assistant.io/)
 
-A Home Assistant custom integration for the **Pet Piano** (https://thepetpiano.com/) — a smart BLE pet feeder that teaches your cat to play piano keys in exchange for treats. This integration was built by reverse-engineering the official Android app's Bluetooth protocol.
-
+A Home Assistant custom integration for the **Pet Piano** (https://thepetpiano.com/) — a smart BLE pet feeder that teaches your cat to play piano keys in exchange for treats.
 ---
 
 ## What is Pet Piano?
