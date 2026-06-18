@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import PetPianoCoordinator
+from .coordinator import PetPianoCoordinator, pet_piano_device_info
 
 BUTTONS = [
     ButtonEntityDescription(
@@ -33,12 +33,7 @@ class PetPianoButton(CoordinatorEntity[PetPianoCoordinator], ButtonEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["address"])},
-            "name": "Pet Piano",
-            "manufacturer": "Pet Piano",
-            "model": "PetPiano BLE",
-        }
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     async def async_press(self) -> None:
         await self.coordinator.async_dispense_now()

@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MODE_MAP
-from .coordinator import PetPianoCoordinator
+from .coordinator import PetPianoCoordinator, pet_piano_device_info
 
 MODE_OPTIONS = ["Normal", "Tutor", "Concert"]
 
@@ -29,12 +29,7 @@ class PetPianoModeSelect(CoordinatorEntity[PetPianoCoordinator], SelectEntity):
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_mode_select"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["address"])},
-            "name": "Pet Piano",
-            "manufacturer": "Pet Piano",
-            "model": "PetPiano BLE",
-        }
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def current_option(self) -> str | None:
@@ -45,4 +40,3 @@ class PetPianoModeSelect(CoordinatorEntity[PetPianoCoordinator], SelectEntity):
     async def async_select_option(self, option: str) -> None:
         mode_reverse = {"Normal": 0, "Tutor": 1, "Concert": 2}
         await self.coordinator.async_set_mode(mode_reverse.get(option, 0))
-        await self.coordinator.async_request_refresh()

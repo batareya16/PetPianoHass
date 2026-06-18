@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import PetPianoCoordinator
+from .coordinator import PetPianoCoordinator, pet_piano_device_info
 
 
 async def async_setup_entry(
@@ -33,12 +33,7 @@ class PetPianoVolumeNumber(CoordinatorEntity[PetPianoCoordinator], NumberEntity)
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_volume"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["address"])},
-            "name": "Pet Piano",
-            "manufacturer": "Pet Piano",
-            "model": "PetPiano BLE",
-        }
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def native_value(self) -> float | None:
@@ -48,7 +43,6 @@ class PetPianoVolumeNumber(CoordinatorEntity[PetPianoCoordinator], NumberEntity)
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_volume(int(value))
-        await self.coordinator.async_request_refresh()
 
 
 class PetPianoTutorLevelNumber(CoordinatorEntity[PetPianoCoordinator], NumberEntity):
@@ -65,12 +59,7 @@ class PetPianoTutorLevelNumber(CoordinatorEntity[PetPianoCoordinator], NumberEnt
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_tutor_level"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["address"])},
-            "name": "Pet Piano",
-            "manufacturer": "Pet Piano",
-            "model": "PetPiano BLE",
-        }
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def native_value(self) -> float | None:
@@ -80,4 +69,3 @@ class PetPianoTutorLevelNumber(CoordinatorEntity[PetPianoCoordinator], NumberEnt
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_tutor_level(int(value))
-        await self.coordinator.async_request_refresh()

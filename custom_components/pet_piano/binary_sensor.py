@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from collections.abc import Callable
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import PetPianoCoordinator, PetPianoData
+from .coordinator import PetPianoCoordinator, PetPianoData, pet_piano_device_info
 
 
 @dataclass
@@ -80,12 +80,7 @@ class PetPianoBinarySensor(CoordinatorEntity[PetPianoCoordinator], BinarySensorE
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["address"])},
-            "name": "Pet Piano",
-            "manufacturer": "Pet Piano",
-            "model": "PetPiano BLE",
-        }
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def is_on(self) -> bool | None:

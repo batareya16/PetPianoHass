@@ -8,18 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import PetPianoCoordinator
-
-DEVICE_INFO_KEYS = ("identifiers", "name", "manufacturer", "model")
-
-
-def _device_info(entry):
-    return {
-        "identifiers": {(DOMAIN, entry.data["address"])},
-        "name": "Pet Piano",
-        "manufacturer": "Pet Piano",
-        "model": "PetPiano BLE",
-    }
+from .coordinator import PetPianoCoordinator, pet_piano_device_info
 
 
 async def async_setup_entry(
@@ -42,7 +31,7 @@ class PetPianoScheduleSwitch(CoordinatorEntity[PetPianoCoordinator], SwitchEntit
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_schedule"
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def is_on(self) -> bool | None:
@@ -52,11 +41,9 @@ class PetPianoScheduleSwitch(CoordinatorEntity[PetPianoCoordinator], SwitchEntit
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.coordinator.async_set_schedule_enabled(True)
-        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_schedule_enabled(False)
-        await self.coordinator.async_request_refresh()
 
 
 class PetPianoMealSwitch(CoordinatorEntity[PetPianoCoordinator], SwitchEntity):
@@ -70,7 +57,7 @@ class PetPianoMealSwitch(CoordinatorEntity[PetPianoCoordinator], SwitchEntity):
         self._meal = meal
         self._attr_name = f"Meal {meal}"
         self._attr_unique_id = f"{entry.entry_id}_meal{meal}_switch"
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def is_on(self) -> bool | None:
@@ -80,8 +67,6 @@ class PetPianoMealSwitch(CoordinatorEntity[PetPianoCoordinator], SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.coordinator.async_set_meal_active(self._meal, True)
-        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_meal_active(self._meal, False)
-        await self.coordinator.async_request_refresh()

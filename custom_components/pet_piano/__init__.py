@@ -33,17 +33,16 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Called when user changes integration options — update coordinator live."""
+    """Called when user changes integration options — update coordinator live.
+
+    We schedule an immediate refresh rather than mutating coordinator.data
+    in-place (which would race the 60-second poller reading the same object).
+    The BLE poll is fast (~1 s) so the new grams value will appear shortly.
+    """
     coordinator: PetPianoCoordinator = hass.data[DOMAIN][entry.entry_id]
     coordinator.grams_per_portion = entry.options.get("grams_per_portion")
-    # Recompute grams_today immediately from cached portions count
-    if coordinator.data is not None:
-        grams = coordinator.grams_per_portion
-        coordinator.data.grams_today = (
-            round(coordinator.data.portions_today * grams, 1) if grams is not None else None
-        )
-        coordinator.async_set_updated_data(coordinator.data)
     _LOGGER.info("Options updated: grams_per_portion=%s", coordinator.grams_per_portion)
+    await coordinator.async_request_refresh()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -69,6 +68,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    coordinator: PetPianoCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.cancel_pending_writes()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok

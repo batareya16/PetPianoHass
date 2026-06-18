@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from bleak import BleakClient, BleakError
 from bleak.backends.device import BLEDevice
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -28,7 +30,7 @@ from .const import (
     CHAR3_MEAL1_MINUTE, CHAR3_MEAL1_HOUR, CHAR3_MEAL1_AMPM, CHAR3_MEAL1_ACTIVE,
     CHAR3_MEAL2_MINUTE, CHAR3_MEAL2_HOUR, CHAR3_MEAL2_AMPM, CHAR3_MEAL2_ACTIVE,
     CHAR3_MEAL3_MINUTE, CHAR3_MEAL3_HOUR, CHAR3_MEAL3_AMPM, CHAR3_MEAL3_ACTIVE,
-    QUARTER_HOUR_MAP, MODE_MAP,
+    QUARTER_HOUR_MAP, QUARTER_HOUR_REVERSE, MODE_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -177,12 +179,14 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             update_interval=SCAN_INTERVAL,
         )
         self.address = address
-        self.grams_per_portion: float = grams_per_portion
+        self.grams_per_portion: float | None = grams_per_portion
         self._lock = asyncio.Lock()
         self._last_tutor_level: int = 1  # remember level across mode switches
         # Cache of last known raw int values per characteristic UUID.
         # Used by write methods so we don't need to re-read before every write.
         self._cached_raw: dict[str, int] = {}
+        # Track background write tasks so they can be cancelled on entry unload.
+        self._pending_tasks: set[asyncio.Task[None]] = set()
 
     # ── internal BLE helpers ────────────────────────────────────────────────
 
@@ -263,7 +267,7 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
 
     async def async_sync_rtc(self) -> None:
         """Explicitly sync HA time to device RTC."""
-        now = datetime.now()
+        now = dt_util.now()
         hour12 = now.hour % 12 or 12
         ampm = 1 if now.hour >= 12 else 0
         v = self._cached(CHAR2_RTC_UUID)
@@ -403,11 +407,24 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             self.async_set_updated_data(self.data)
 
     def _fire_write(self, uuid: str, value: int) -> None:
-        """Schedule a BLE write as a background task (non-blocking)."""
+        """Schedule a BLE write as a background task (non-blocking).
+
+        Tasks are tracked in _pending_tasks and cancelled on entry unload.
+        """
         async def _task() -> None:
             async with self._lock:
                 await self._write_cached(uuid, value)
-        self.hass.async_create_task(_task())
+        task: asyncio.Task[None] = self.hass.async_create_task(
+            _task(), name=f"pet_piano_write_{uuid[:8]}"
+        )
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+
+    def cancel_pending_writes(self) -> None:
+        """Cancel all in-flight BLE write tasks — call this on entry unload."""
+        for task in list(self._pending_tasks):
+            task.cancel()
+        self._pending_tasks.clear()
 
     async def async_dispense_now(self) -> None:
         """Trigger manual food dispense."""
@@ -484,12 +501,6 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
 
     async def async_set_meal_time(self, meal: int, hour12: int, minute_qh: int, ampm: int) -> None:
         """Set meal time. hour12=1-12, minute_qh=0/15/30/45, ampm=0/1."""
-        from .const import (
-            CHAR3_MEAL1_HOUR, CHAR3_MEAL1_MINUTE, CHAR3_MEAL1_AMPM,
-            CHAR3_MEAL2_HOUR, CHAR3_MEAL2_MINUTE, CHAR3_MEAL2_AMPM,
-            CHAR3_MEAL3_HOUR, CHAR3_MEAL3_MINUTE, CHAR3_MEAL3_AMPM,
-            QUARTER_HOUR_REVERSE,
-        )
         fields = {
             1: (CHAR3_MEAL1_HOUR, CHAR3_MEAL1_MINUTE, CHAR3_MEAL1_AMPM),
             2: (CHAR3_MEAL2_HOUR, CHAR3_MEAL2_MINUTE, CHAR3_MEAL2_AMPM),
@@ -527,3 +538,17 @@ class PetPianoCoordinator(DataUpdateCoordinator[PetPianoData]):
             self._optimistic_update()
         self._fire_write(CHAR3_SCHEDULE_UUID, v)
         _LOGGER.info("Meal %d active=%s queued", meal, active)
+
+
+def pet_piano_device_info(address: str) -> DeviceInfo:
+    """Return a shared DeviceInfo for all Pet Piano entities.
+
+    Centralised here so all 7 entity platforms use a single definition
+    instead of duplicating the raw dict everywhere.
+    """
+    return DeviceInfo(
+        identifiers={(DOMAIN, address)},
+        name="Pet Piano",
+        manufacturer="Pet Piano",
+        model="PetPiano BLE",
+    )

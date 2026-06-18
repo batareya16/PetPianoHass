@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, QUARTER_HOUR_REVERSE
-from .coordinator import PetPianoCoordinator
+from .coordinator import PetPianoCoordinator, pet_piano_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,12 +38,7 @@ class PetPianoMealTime(CoordinatorEntity[PetPianoCoordinator], TimeEntity):
         self._attr_name = f"Meal {meal} Time"
         self._attr_icon = "mdi:clock-time-eight-outline"
         self._attr_unique_id = f"{entry.entry_id}_meal{meal}_time"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["address"])},
-            "name": "Pet Piano",
-            "manufacturer": "Pet Piano",
-            "model": "PetPiano BLE",
-        }
+        self._attr_device_info = pet_piano_device_info(entry.data["address"])
 
     @property
     def native_value(self) -> time | None:
@@ -69,7 +64,6 @@ class PetPianoMealTime(CoordinatorEntity[PetPianoCoordinator], TimeEntity):
         )
         _LOGGER.info("Set meal %d time to %02d:%02d %s", self._meal, hour12, minute, "PM" if ampm else "AM")
         await self.coordinator.async_set_meal_time(self._meal, hour12, minute, ampm)
-        await self.coordinator.async_request_refresh()
 
     # ── helpers ────────────────────────────────────────────────────────────
 

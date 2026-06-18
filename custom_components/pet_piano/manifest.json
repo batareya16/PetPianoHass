@@ -1,11 +1,12 @@
 {
   "domain": "pet_piano",
   "name": "Pet Piano",
-  "version": "0.1.0",
-  "documentation": "https://github.com/your-repo/pet_piano",
+  "version": "1.0.0",
+  "documentation": "https://github.com/batareya16/PetPianoHass",
+  "issue_tracker": "https://github.com/batareya16/PetPianoHass/issues",
   "requirements": [],
   "dependencies": ["bluetooth"],
-  "codeowners": [],
+  "codeowners": ["@batareya16"],
   "iot_class": "local_polling",
   "bluetooth": [
     {
